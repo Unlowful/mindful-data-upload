@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Life Dashboard Sync</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --orange:   #F46B1A;
+            --bg:       #111111;
+            --card-bg:  #1C1C1E;
+            --border:   #2C2C2E;
+            --muted:    rgba(255,255,255,0.45);
+            --success:  #34C759;
+            --error:    #FF453A;
+            --radius:   20px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: var(--bg);
+            color: #fff;
+            font-family: 'DM Sans', -apple-system, sans-serif;
+            min-height: 100vh;
+            padding: 24px 16px 40px;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+        header h1 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+        }
+        header p {
+            font-size: 0.8rem;
+            color: var(--muted);
+            margin-top: 4px;
+        }
+
+        .cards {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            max-width: 480px;
+            margin: 0 auto;
+        }
+
+        /* ── Source Card ── */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            transition: border-color 0.2s;
+        }
+        .card.uploading { border-color: var(--orange); }
+        .card.done      { border-color: var(--success); }
+        .card.errored   { border-color: var(--error); }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 18px;
+        }
+
+        .card-icon {
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            flex-shrink: 0;
+        }
+
+        .card-meta { flex: 1; min-width: 0; }
+        .card-meta h2 {
+            font-size: 0.95rem;
+            font-weight: 700;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .card-meta p {
+            font-size: 0.72rem;
+            color: var(--muted);
+            margin-top: 1px;
+        }
+
+        .upload-btn {
+            background: var(--orange);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            padding: 9px 16px;
+            font-family: inherit;
+            font-size: 0.78rem;
+            font-weight: 700;
+            cursor: pointer;
+            white-space: nowrap;
+            flex-shrink: 0;
+            letter-spacing: 0.3px;
+            -webkit-tap-highlight-color: transparent;
+            transition: opacity 0.15s, transform 0.1s;
+        }
+        .upload-btn:active { transform: scale(0.96); opacity: 0.85; }
+        .upload-btn:disabled { opacity: 0.4; cursor: default; transform: none; }
+
+        /* ── Status panel (inside card, below header) ── */
+        .card-status {
+            border-top: 1px solid var(--border);
+            padding: 12px 18px;
+            display: none;
+        }
+        .card-status.visible { display: block; }
+
+        .status-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.82rem;
+        }
+
+        .spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255,255,255,0.15);
+            border-top-color: var(--orange);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            flex-shrink: 0;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .status-text { color: rgba(255,255,255,0.8); }
+        .status-text.success { color: var(--success); font-weight: 600; }
+        .status-text.error   { color: var(--error);   font-weight: 600; }
+
+        /* stats pills */
+        .stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 10px;
+        }
+        .stat-pill {
+            background: rgba(255,255,255,0.07);
+            border-radius: 8px;
+            padding: 5px 10px;
+            font-size: 0.73rem;
+            color: rgba(255,255,255,0.7);
+        }
+        .stat-pill strong { color: #fff; font-weight: 700; }
+
+        /* ── Add source placeholder ── */
+        .add-card {
+            border: 1.5px dashed var(--border);
+            border-radius: var(--radius);
+            padding: 18px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: var(--muted);
+            font-size: 0.82rem;
+            max-width: 480px;
+            margin: 0 auto;
+        }
+        .add-card-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.05);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            flex-shrink: 0;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>Life Dashboard Sync</h1>
+    <p>Upload your data files to sync to Google Sheets</p>
+</header>
+
+<div class="cards" id="cards">
+
+    <!-- ── CARD 1: Mindful ── -->
+    <div class="card" id="card-mindful">
+        <input type="file" id="file-mindful" hidden accept=".sqlite,.db">
+        <div class="card-header">
+            <div class="card-icon" style="background: rgba(244,107,26,0.15);">🧘</div>
+            <div class="card-meta">
+                <h2>Mindful — Phone Usage</h2>
+                <p>Mindful_vXXX.sqlite · Usage &amp; Notifications</p>
+            </div>
+            <button class="upload-btn" onclick="triggerUpload('mindful')">SELECT</button>
+        </div>
+        <div class="card-status" id="status-mindful"></div>
+    </div>
+
+    <!-- ── CARD 2: Grayjay ── -->
+    <div class="card" id="card-grayjay">
+        <input type="file" id="file-grayjay" hidden accept="">
+        <div class="card-header">
+            <div class="card-icon" style="background: rgba(100,210,255,0.12);">📺</div>
+            <div class="card-meta">
+                <h2>Grayjay — Watch History</h2>
+                <p>history · Video watch history</p>
+            </div>
+            <button class="upload-btn" onclick="triggerUpload('grayjay')">SELECT</button>
+        </div>
+        <div class="card-status" id="status-grayjay"></div>
+    </div>
+
+</div>
+
+<!-- placeholder for future sources -->
+<div class="add-card" style="margin-top: 14px;">
+    <div class="add-card-icon">＋</div>
+    <span>More sources coming soon</span>
+</div>
+
+<script>
+    // ── CONFIG ──────────────────────────────────────────────
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwc6PnZrDwhpdpkBFXLfqLBJh84ixo-o5cIcGvliV30MtsNYiQ610sW8MR2LZXMGruV/exec';
+    // ────────────────────────────────────────────────────────
+
+    function triggerUpload(source) {
+        document.getElementById('file-' + source).click();
+    }
+
+    // ── MINDFUL ─────────────────────────────────────────────
+    document.getElementById('file-mindful').onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const card = document.getElementById('card-mindful');
+        const btn  = card.querySelector('.upload-btn');
+        btn.disabled = true;
+        setStatus('mindful', 'loading', 'Initializing SQL engine…');
+        setCardState(card, 'uploading');
+
+        try {
+            const SQL = await initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${f}` });
+            const buf = await file.arrayBuffer();
+            setStatus('mindful', 'loading', 'Reading database…');
+            const db = new SQL.Database(new Uint8Array(buf));
+
+            const payload = {
+                usage: getRows(db, `SELECT package_name, date, screen_time AS total_time, mobile_data, wifi_data FROM app_usage_table`),
+                notifications: getRows(db, `SELECT id, package_name, time_stamp, title, content AS text, category, is_read FROM notifications_table`),
+                focus: getRows(db, `SELECT id, type, state, start_date_time, duration_secs, reflection FROM focus_sessions_table`)
+            };
+
+            setStatus('mindful', 'loading', `Sending ${payload.usage.length + payload.notifications.length + payload.focus.length} rows…`);
+
+            const res  = await fetch(SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(payload) });
+            const text = await res.text();
+            if (!res.ok || text.startsWith('Error')) throw new Error(text);
+
+            setCardState(card, 'done');
+            setStatus('mindful', 'success', '✔ Sync successful', [
+                { label: 'Usage',         value: payload.usage.length },
+                { label: 'Notifications', value: payload.notifications.length },
+                { label: 'Focus',         value: payload.focus.length }
+            ]);
+        } catch (err) {
+            setCardState(card, 'errored');
+            setStatus('mindful', 'error', '✘ ' + err.message);
+        } finally {
+            btn.disabled = false;
+            e.target.value = '';
+        }
+    };
+
+    // ── GRAYJAY ─────────────────────────────────────────────
+    document.getElementById('file-grayjay').onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const card = document.getElementById('card-grayjay');
+        const btn  = card.querySelector('.upload-btn');
+        btn.disabled = true;
+        setStatus('grayjay', 'loading', 'Reading history file…');
+        setCardState(card, 'uploading');
+
+        try {
+            const text    = await file.text();
+            const raw     = JSON.parse(text);
+            const entries = raw.map(entry => {
+                const parts    = entry.split('|||');
+                const url      = parts[0] || '';
+                const platform = extractPlatform(url);
+                return {
+                    url,
+                    timestamp:    parseInt(parts[1]) || 0,
+                    duration_secs: parseInt(parts[2]) || 0,
+                    title:        parts[3] || '',
+                    platform
+                };
+            });
+
+            setStatus('grayjay', 'loading', `Sending ${entries.length} entries…`);
+
+            const payload = { grayjay: entries };
+            const res  = await fetch(SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(payload) });
+            const result = await res.text();
+            if (!res.ok || result.startsWith('Error')) throw new Error(result);
+
+            // Count by platform
+            const counts = entries.reduce((acc, r) => { acc[r.platform] = (acc[r.platform] || 0) + 1; return acc; }, {});
+            const pills  = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0, 4).map(([p, n]) => ({ label: p, value: n }));
+
+            setCardState(card, 'done');
+            setStatus('grayjay', 'success', '✔ Sync successful', [
+                { label: 'Total entries', value: entries.length },
+                ...pills
+            ]);
+        } catch (err) {
+            setCardState(card, 'errored');
+            setStatus('grayjay', 'error', '✘ ' + err.message);
+        } finally {
+            btn.disabled = false;
+            e.target.value = '';
+        }
+    };
+
+    // ── HELPERS ─────────────────────────────────────────────
+    function extractPlatform(url) {
+        try {
+            const host = new URL(url).hostname.replace('www.', '');
+            if (host.includes('youtube') || host.includes('youtu.be')) return 'YouTube';
+            if (host.includes('rumble'))   return 'Rumble';
+            if (host.includes('odysee') || url.startsWith('lbry://')) return 'Odysee';
+            if (host.includes('twitch'))   return 'Twitch';
+            if (host.includes('ted.com'))  return 'TED';
+            if (host.includes('mixcloud')) return 'Mixcloud';
+            if (host.includes('soundcloud')) return 'SoundCloud';
+            if (host.includes('apple'))    return 'Apple Podcasts';
+            return host.split('.')[0];
+        } catch { return 'unknown'; }
+    }
+
+    function getRows(db, query) {
+        try {
+            const res = db.exec(query);
+            if (!res || !res.length) return [];
+            const cols = res[0].columns;
+            return res[0].values.map(row => {
+                const obj = {};
+                cols.forEach((c, i) => obj[c] = row[i]);
+                return obj;
+            });
+        } catch (err) {
+            console.warn('Query failed:', query, err);
+            return [];
+        }
+    }
+
+    function setCardState(card, state) {
+        card.classList.remove('uploading', 'done', 'errored');
+        if (state) card.classList.add(state);
+    }
+
+    function setStatus(source, type, message, stats) {
+        const el = document.getElementById('status-' + source);
+        el.className = 'card-status visible';
+
+        let html = `<div class="status-row">`;
+        if (type === 'loading') html += `<div class="spinner"></div>`;
+        html += `<span class="status-text ${type === 'success' ? 'success' : type === 'error' ? 'error' : ''}">${message}</span>`;
+        html += `</div>`;
+
+        if (stats && stats.length) {
+            html += `<div class="stats">`;
+            stats.forEach(s => {
+                html += `<div class="stat-pill"><strong>${s.value.toLocaleString()}</strong> ${s.label}</div>`;
+            });
+            html += `</div>`;
+        }
+
+        el.innerHTML = html;
+    }
+</script>
+
+</body>
+</html>
