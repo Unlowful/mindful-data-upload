@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Mindful Sync</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --orange: #F46B1A;
+            --bg: #1A0F08;
+            --card-bg: #261911;
+        }
+        body {
+            background-color: var(--bg);
+            color: white;
+            font-family: 'DM Sans', sans-serif;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            background: var(--card-bg);
+            padding: 40px 30px;
+            border-radius: 24px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            max-width: 400px;
+            width: 100%;
+        }
+        h1 { font-size: 1.5rem; margin-bottom: 10px; }
+        p { font-size: 0.9rem; opacity: 0.7; margin-bottom: 30px; line-height: 1.4; }
+        .upload-btn {
+            background-color: var(--orange);
+            color: white;
+            border: none;
+            padding: 18px 36px;
+            border-radius: 14px;
+            font-weight: 700;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: transform 0.1s;
+            width: 100%;
+        }
+        .upload-btn:active { transform: scale(0.98); opacity: 0.9; }
+        #status {
+            margin-top: 25px;
+            font-size: 0.85rem;
+            padding: 15px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.05);
+            display: none;
+        }
+        .loading-dots:after { content: '...'; animation: dots 1.5s steps(5, end) infinite; }
+        @keyframes dots { 0%, 20% { content: ''; } 40% { content: '.'; } 60% { content: '..'; } 80%, 100% { content: '...'; } }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Database Sync</h1>
+        <p>Select your <b>Mindful.sqlite</b> file to extract usage and notification data directly to your dashboard.</p>
+        
+        <button class="upload-btn" onclick="document.getElementById('fileInput').click()">
+            SELECT SQLITE FILE
+        </button>
+        <input type="file" id="fileInput" hidden accept=".sqlite,.db">
+
+        <div id="status"></div>
+    </div>
+
+    <script>
+        // REPLACE THIS WITH YOUR GOOGLE APPS SCRIPT URL
+        const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwc6PnZrDwhpdpkBFXLfqLBJh84ixo-o5cIcGvliV30MtsNYiQ610sW8MR2LZXMGruV/exec';
+
+        const fileInput = document.getElementById('fileInput');
+        const status = document.getElementById('status');
+
+        fileInput.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            showStatus("Initializing SQL engine...", true);
+
+            try {
+                // Initialize SQL.js
+                const SQL = await initSqlJs({ 
+                    locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${f}` 
+                });
+
+                const reader = new FileReader();
+                reader.onload = async function() {
+                    showStatus("Reading database tables...", true);
+                    
+                    const db = new SQL.Database(new Uint8Array(this.result));
+                    
+                    // Extracts exactly what we need for the Raw tabs.
+                    // Column aliases (AS) map SQLite field names to match sheet header names exactly.
+                    const payload = {
+                        usage: getRows(db, `SELECT 
+                            package_name,
+                            date,
+                            screen_time  AS total_time,
+                            mobile_data,
+                            wifi_data
+                            FROM app_usage_table`),
+                        notifications: getRows(db, `SELECT 
+                            id,
+                            package_name,
+                            time_stamp,
+                            title,
+                            content      AS text,
+                            category,
+                            is_read
+                            FROM notifications_table`),
+                        focus: getRows(db, "SELECT id, type, state, start_date_time, duration_secs, reflection FROM focus_sessions_table")
+                    };
+
+                    showStatus("Sending data to Google Sheets...", true);
+
+                    // text/plain avoids a CORS preflight — Apps Script still reads the body as JSON.
+                    const response = await fetch(SCRIPT_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'text/plain' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const resultText = await response.text();
+
+                    if (!response.ok || resultText.startsWith("Error")) {
+                        throw new Error("Apps Script returned: " + resultText);
+                    }
+
+                    showStatus(`<span style='color: #4CAF50; font-weight: bold;'>✔ Sync Successful!</span><br>
+                        <small>
+                            Usage: ${payload.usage.length} rows &nbsp;|&nbsp;
+                            Notifications: ${payload.notifications.length} rows &nbsp;|&nbsp;
+                            Focus: ${payload.focus.length} rows
+                        </small>`, false);
+                };
+                
+                reader.readAsArrayBuffer(file);
+
+            } catch (err) {
+                showStatus("<span style='color: #ff4444;'>Error:</span> " + err.message, false);
+                console.error(err);
+            }
+        };
+
+        function getRows(db, query) {
+            try {
+                const res = db.exec(query);
+                if (!res || !res.length) return [];
+                const cols = res[0].columns;
+                return res[0].values.map(row => {
+                    let obj = {};
+                    cols.forEach((col, i) => obj[col] = row[i]);
+                    return obj;
+                });
+            } catch (e) {
+                console.warn("Table or Query failed: ", query);
+                return [];
+            }
+        }
+
+        function showStatus(text, isLoading) {
+            status.style.display = "block";
+            status.innerHTML = isLoading ? `<span class="loading-dots">${text}</span>` : text;
+        }
+    </script>
+</body>
+</html>
